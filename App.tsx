@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { PricingTable, SignedIn, SignedOut, UserButton, useClerk, useUser } from '@clerk/clerk-react';
 import ResumeInput from './components/ResumeInput';
 import PreviewFrame from './components/PreviewFrame';
@@ -284,54 +284,70 @@ const App = () => {
     clerkUser?.emailAddresses?.[0]?.emailAddress ??
     'User';
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadBilling() {
-      if (!clerkUser) {
-        UsageService.setSubscriptionActive(false);
-        setUsageStats(UsageService.getStats());
-        setPlanLabel('Free');
-        setPlanStatus('unavailable');
-        setHasProAccess(false);
-        return;
-      }
-
-      try {
-        setPlanStatus('loading');
-        const subscription = await clerk.billing.getSubscription({});
-        const proItem = subscription.subscriptionItems.find(
-          (i) => i.status === 'active' && i.plan?.slug === PRO_PLAN_SLUG
-        );
-        const activeItem =
-          proItem ??
-          subscription.subscriptionItems.find((i) => i.status === 'active') ??
-          subscription.subscriptionItems[0];
-        const label = activeItem?.plan?.name || 'Free';
-        const isProActive = !!proItem;
-        if (!cancelled) {
-          setHasProAccess(isProActive);
-          UsageService.setSubscriptionActive(isProActive);
-          setUsageStats(UsageService.getStats());
-          setPlanLabel(label);
-          setPlanStatus('ready');
-        }
-      } catch {
-        if (!cancelled) {
-          UsageService.setSubscriptionActive(false);
-          setUsageStats(UsageService.getStats());
-          setPlanLabel('Free');
-          setPlanStatus('unavailable');
-          setHasProAccess(false);
-        }
-      }
+  const refreshBilling = useCallback(async () => {
+    if (!clerkUser) {
+      UsageService.setSubscriptionActive(false);
+      setUsageStats(UsageService.getStats());
+      setPlanLabel('Free');
+      setPlanStatus('unavailable');
+      setHasProAccess(false);
+      return;
     }
 
-    loadBilling();
-    return () => {
-      cancelled = true;
+    try {
+      setPlanStatus('loading');
+      const subscription = await clerk.billing.getSubscription({});
+      const proItem = subscription.subscriptionItems.find(
+        (i) => i.status === 'active' && i.plan?.slug === PRO_PLAN_SLUG
+      );
+      const activeItem =
+        proItem ??
+        subscription.subscriptionItems.find((i) => i.status === 'active') ??
+        subscription.subscriptionItems[0];
+      const label = activeItem?.plan?.name || 'Free';
+      const isProActive = !!proItem;
+
+      setHasProAccess(isProActive);
+      UsageService.setSubscriptionActive(isProActive);
+      setUsageStats(UsageService.getStats());
+      setPlanLabel(label);
+      setPlanStatus('ready');
+    } catch {
+      UsageService.setSubscriptionActive(false);
+      setUsageStats(UsageService.getStats());
+      setPlanLabel('Free');
+      setPlanStatus('unavailable');
+      setHasProAccess(false);
+    }
+  }, [clerk, clerkUser]);
+
+  // Initial fetch (and whenever the signed-in user changes)
+  useEffect(() => {
+    void refreshBilling();
+  }, [refreshBilling, clerkUser?.id]);
+
+  // While on the paywall, keep checking so Pro access flips "instantly" after checkout completes.
+  useEffect(() => {
+    if (!clerkUser) return;
+    if (hasProAccess) return;
+
+    const tick = () => void refreshBilling();
+    const onFocus = () => tick();
+    const onVisibility = () => {
+      if (!document.hidden) tick();
     };
-  }, [clerk, clerkUser?.id]);
+
+    // Fast enough to feel instant, light enough to be safe.
+    const interval = window.setInterval(tick, 2500);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [clerkUser, hasProAccess, refreshBilling]);
 
   const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
   const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -388,7 +404,7 @@ const App = () => {
                     Billing isn’t available yet (or failed to load). Enable Clerk Billing and make your plan public, then refresh.
                   </div>
                 ) : (
-                  <PricingTable for="user" ctaPosition="bottom" newSubscriptionRedirectUrl="/" />
+                  <PricingTable for="user" ctaPosition="bottom" newSubscriptionRedirectUrl={window.location.href} />
                 )}
               </div>
             </div>
