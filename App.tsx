@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SignedIn, SignedOut, UserButton, useClerk, useUser } from '@clerk/clerk-react';
+import { PricingTable, SignedIn, SignedOut, UserButton, useClerk, useUser } from '@clerk/clerk-react';
 import ResumeInput from './components/ResumeInput';
 import PreviewFrame from './components/PreviewFrame';
 import ChatSidebar from './components/ChatSidebar';
@@ -9,6 +9,8 @@ import { parseResumeText, generateInitialSite, enhanceSiteVisuals, updateSite, d
 import { UsageService } from './services/usageService';
 import { AppState, ChatMessage, ResumeData, UserPreferences, StyleStrategy } from './types';
 import { Layers, Sparkles, Menu, X, Shield, FileText, Mail, Globe, ExternalLink, RotateCcw, AlertCircle, LogOut, User, Server } from 'lucide-react';
+
+const PRO_PLAN_SLUG = 'digitalresumepro';
 
 const App = () => {
   const [view, setView] = useState<'APP' | 'DOMAIN_SETUP'>('APP');
@@ -46,6 +48,7 @@ const App = () => {
   // Billing (best-effort; Clerk Billing APIs are currently marked experimental)
   const [planLabel, setPlanLabel] = useState<string>('Free');
   const [planStatus, setPlanStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [hasProAccess, setHasProAccess] = useState(false);
 
   const handleLogout = () => {
     setGeneratedHtml('');
@@ -290,17 +293,25 @@ const App = () => {
         setUsageStats(UsageService.getStats());
         setPlanLabel('Free');
         setPlanStatus('unavailable');
+        setHasProAccess(false);
         return;
       }
 
       try {
         setPlanStatus('loading');
         const subscription = await clerk.billing.getSubscription({});
-        const activeItem = subscription.subscriptionItems.find((i) => i.status === 'active') ?? subscription.subscriptionItems[0];
+        const proItem = subscription.subscriptionItems.find(
+          (i) => i.status === 'active' && i.plan?.slug === PRO_PLAN_SLUG
+        );
+        const activeItem =
+          proItem ??
+          subscription.subscriptionItems.find((i) => i.status === 'active') ??
+          subscription.subscriptionItems[0];
         const label = activeItem?.plan?.name || 'Free';
-        const isPaid = (activeItem?.plan?.fee?.amount ?? 0) > 0 || (activeItem?.plan?.annualFee?.amount ?? 0) > 0;
+        const isProActive = !!proItem;
         if (!cancelled) {
-          UsageService.setSubscriptionActive(isPaid);
+          setHasProAccess(isProActive);
+          UsageService.setSubscriptionActive(isProActive);
           setUsageStats(UsageService.getStats());
           setPlanLabel(label);
           setPlanStatus('ready');
@@ -311,6 +322,7 @@ const App = () => {
           setUsageStats(UsageService.getStats());
           setPlanLabel('Free');
           setPlanStatus('unavailable');
+          setHasProAccess(false);
         }
       }
     }
@@ -355,7 +367,33 @@ const App = () => {
       </SignedOut>
 
       <SignedIn>
-        {view === 'DOMAIN_SETUP' ? (
+        {!hasProAccess ? (
+          <div className="min-h-screen bg-white text-zinc-900 flex items-center justify-center p-6">
+            <div className="w-full max-w-3xl">
+              <div className="flex items-center justify-between gap-4 mb-6">
+                <div>
+                  <div className="text-2xl font-bold tracking-tight">Start your 3-day trial</div>
+                  <div className="text-sm text-zinc-500 mt-1">
+                    You need an active subscription to use the builder.
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  <UserButton />
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-zinc-200 shadow-xl bg-white p-6">
+                {planStatus === 'unavailable' ? (
+                  <div className="text-sm text-zinc-600">
+                    Billing isn’t available yet (or failed to load). Enable Clerk Billing and make your plan public, then refresh.
+                  </div>
+                ) : (
+                  <PricingTable for="user" ctaPosition="bottom" newSubscriptionRedirectUrl="/" />
+                )}
+              </div>
+            </div>
+          </div>
+        ) : view === 'DOMAIN_SETUP' ? (
           <CustomDomainScreen onBack={() => setView('APP')} />
         ) : (
           <div className="flex flex-col h-screen w-full overflow-hidden bg-white text-zinc-900 font-sans">
